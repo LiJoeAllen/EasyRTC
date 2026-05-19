@@ -1,0 +1,18 @@
+[package]
+name = "signalserver"
+version = "1.0.0"
+edition = "2021"
+description = "EasyRTC WebRTC signaling server"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+tokio-tungstenite = "0.29"
+futures-util = "0.3"
+uuid = { version = "1", features = ["v4"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "time"] }
+anyhow = "1"
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "logging"] }
+rustls = { version = "0.23.40", default-features = false, features = ["ring"] }
+rustls-pemfile = "2"
+socket2 = "0.6"

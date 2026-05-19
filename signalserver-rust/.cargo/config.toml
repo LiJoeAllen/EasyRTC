@@ -1,0 +1,38 @@
+# ===== signalserver 交叉编译 Linker 配置 =====
+# 当为某个 target 编译时，Cargo 会自动选择对应的 linker
+# 确保对应工具链已安装并在 PATH 中
+#
+# Linux 目标 (需安装 gcc-<arch>-linux-gnu):
+#   sudo apt install gcc-x86-64-linux-gnu gcc-aarch64-linux-gnu gcc-i686-linux-gnu
+#
+# Windows MinGW 目标 (需安装 mingw-w64):
+#   sudo apt install mingw-w64         # Linux
+#   或通过 MSYS2: pacman -S mingw-w64-x86_64-toolchain
+
+# --- Linux x86_64 ---
+[target.x86_64-unknown-linux-gnu]
+linker = "x86_64-linux-gnu-gcc"
+
+# --- Linux ARM64 ---
+[target.aarch64-unknown-linux-gnu]
+linker = "aarch64-linux-gnu-gcc"
+
+# --- Linux x86 (32-bit) ---
+[target.i686-unknown-linux-gnu]
+linker = "i686-linux-gnu-gcc"
+
+# --- Windows x86_64 (MinGW) ---
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+
+# --- Windows x86 (MinGW) ---
+[target.i686-pc-windows-gnu]
+linker = "i686-w64-mingw32-gcc"
+
+# --- Windows MSVC ---
+# 使用 Visual Studio 的 link.exe，需要在 VS Developer Command Prompt 中运行
+# 或在 PowerShell 中: Import-Module "C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"; Enter-VsDevShell -Arch amd64
+
+# --- macOS 目标 ---
+# 只能在 macOS 上编译 (需要 Xcode Command Line Tools)
+# macOS 使用 Apple Clang，无需额外配置 linker

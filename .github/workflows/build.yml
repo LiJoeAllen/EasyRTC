@@ -1,0 +1,168 @@
+# ===== signalserver 全平台构建工作流 =====
+#
+# 使用 GitHub Actions 原生 Runner 编译所有平台:
+#   ubuntu-latest → Linux (x86_64, ARM64, x86)
+#   windows-latest → Windows (MSVC, MinGW x86_64, MinGW x86)
+#   macos-latest → macOS (Intel, Apple Silicon)
+#
+# 优势: 每个目标在对应的原生平台上编译, 完全绕开 ring crate
+# 的交叉编译问题。本地构建脚本 (build-all.ps1, build-all.sh)
+# 仅用于本地测试, CI 使用此工作流。
+
+name: Build signalserver
+
+on:
+  push:
+    branches: [master]
+    tags: ["v*"]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # --- Linux (ubuntu-latest) ---
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+          - target: i686-unknown-linux-gnu
+            os: ubuntu-latest
+
+          # --- Windows (windows-latest) ---
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+          - target: x86_64-pc-windows-gnu
+            os: windows-latest
+          - target: i686-pc-windows-gnu
+            os: windows-latest
+
+          # --- macOS (macos-latest) ---
+          - target: x86_64-apple-darwin
+            os: macos-latest
+          - target: aarch64-apple-darwin
+            os: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      # ========== Linux 交叉编译 ==========
+      - name: Install Linux cross-compilers
+        if: runner.os == 'Linux' && matrix.target != 'x86_64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          case "${{ matrix.target }}" in
+            aarch64-*)
+              sudo apt-get install -y --no-install-recommends \
+                gcc-aarch64-linux-gnu libc6-dev-arm64-cross
+              echo "CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
+              ;;
+            i686-*)
+              sudo apt-get install -y --no-install-recommends \
+                gcc-i686-linux-gnu libc6-dev-i386-cross
+              echo "CC_i686_unknown_linux_gnu=i686-linux-gnu-gcc" >> $GITHUB_ENV
+              ;;
+          esac
+
+      # ========== Windows MinGW 工具链 ==========
+      - name: Install MinGW (MSYS2)
+        if: runner.os == 'Windows' && contains(matrix.target, 'gnu')
+        shell: pwsh
+        run: |
+          choco install msys2 -y --no-progress
+          $msys2 = if (Test-Path "C:\tools\msys64") { "C:\tools\msys64" } else { "C:\msys64" }
+          & "$msys2\usr\bin\bash.exe" -lc "pacman -S --noconfirm --needed mingw-w64-x86_64-gcc mingw-w64-i686-gcc"
+          # Verify compilers exist
+          Write-Host "Checking compilers..."
+          $x64 = "$msys2\mingw64\bin\x86_64-w64-mingw32-gcc.exe"
+          $x86 = "$msys2\mingw32\bin\i686-w64-mingw32-gcc.exe"
+          if (Test-Path $x64) { Write-Host "  OK: $x64" } else { Write-Host "  MISSING: $x64" }
+          if (Test-Path $x86) { Write-Host "  OK: $x86" } else { Write-Host "  MISSING: $x86" }
+          # Add both bin directories to PATH for subsequent steps
+          "$msys2\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "$msys2\mingw32\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      # ========== macOS 环境 ==========
+      - name: Set macOS SDK
+        if: runner.os == 'macOS'
+        run: |
+          echo "SDKROOT=$(xcrun -sdk macosx --show-sdk-path)" >> $GITHUB_ENV
+          echo "MACOSX_DEPLOYMENT_TARGET=10.12" >> $GITHUB_ENV
+
+      # ========== 编译 ==========
+      - name: Build
+        working-directory: signalserver-rust
+        shell: pwsh
+        run: |
+          if ($env:RUNNER_OS -eq "Windows" -and "${{ matrix.target }}" -match "gnu") {
+            $msys2 = if (Test-Path "C:\tools\msys64") { "C:\tools\msys64" } else { "C:\msys64" }
+            $env:PATH = "$msys2\mingw64\bin;$msys2\mingw32\bin;$env:PATH"
+          }
+          cargo build --release --target ${{ matrix.target }}
+
+      - name: Copy config and ssl to output
+        working-directory: signalserver-rust
+        run: |
+          OUT="target/${{ matrix.target }}/release"
+          cp signalserver.ini "$OUT/" 2>/dev/null || true
+          if [ -d ssl ]; then cp -r ssl "$OUT/"; fi
+        shell: bash
+
+      # ========== 上传构建产物 ==========
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: signalserver-${{ matrix.target }}
+          path: |
+            signalserver-rust/target/${{ matrix.target }}/release/signalserver
+            signalserver-rust/target/${{ matrix.target }}/release/signalserver.exe
+            signalserver-rust/target/${{ matrix.target }}/release/signalserver.ini
+            signalserver-rust/target/${{ matrix.target }}/release/ssl/**
+          if-no-files-found: warn
+
+  # ========== Release: 打标签时自动上传所有产物 ==========
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          # 创建 Release (已存在则忽略)
+          gh release create "${{ github.ref_name }}" --generate-notes 2>/dev/null || true
+
+          # 上传每个构建产物
+          find artifacts -type f | while read -r file; do
+            # 重命名: signalserver-x86_64-unknown-linux-gnu/signalserver → signalserver-x86_64-unknown-linux-gnu
+            dirname="$(basename "$(dirname "$file")")"
+            ext=""
+            case "$file" in
+              *.exe) ext=".exe" ;;
+            esac
+            basename="signalserver-${dirname%%$ext}${ext}"
+            cp "$file" "/tmp/$basename"
+            gh release upload "${{ github.ref_name }}" "/tmp/$basename" --clobber
+          done
